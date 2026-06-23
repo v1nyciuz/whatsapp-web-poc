@@ -11,7 +11,7 @@ public class WhatsAppService {
 
     // URL do seu servidor Node.js — troque pelo IP/domínio em produção
     private static final String SERVER_URL = 'https://six-grapes-march.loca.lt';
-    private static final String WEBHOOK_SECRET = '9o5bkn3f12secaghjr7tlm6y';
+    private static final String WEBHOOK_SECRET = 'SEU_WEBHOOK_SECRET';
 
     /**
      * Envia uma mensagem WhatsApp para um número.

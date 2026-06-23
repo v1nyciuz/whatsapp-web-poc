@@ -23,7 +23,7 @@ client.on("message", lambda msg: print(f"{msg.from_jid}: {msg.text}"))
 client.run_forever_sync()
 
 # Enviar
-client.send_text("5534992111561@s.whatsapp.net", "Olá!")
+client.send_text("SEU_NUMERO@s.whatsapp.net", "Olá!")
 ```
 
 ## Instalação

@@ -258,12 +258,12 @@ function printInstructions() {
   logger.info('  ✅ WhatsApp POC PRONTA!');
   logger.info('');
   logger.info('  📤 ENVIAR (PowerShell):');
-  logger.info(`    Invoke-RestMethod -Uri "http://localhost:${port}/api/send" -Method Post -ContentType "application/json" -Headers @{"x-webhook-secret" = "9o5bkn3f12secaghjr7tlm6y"} -Body '{"to":"5534992111561","message":"Teste!"}'`);
+  logger.info(`    Invoke-RestMethod -Uri "http://localhost:${port}/api/send" -Method Post -ContentType "application/json" -Headers @{"x-webhook-secret" = "SEU_WEBHOOK_SECRET"} -Body '{"to":"SEU_NUMERO","message":"Teste!"}'`);
   logger.info('');
   logger.info('  📊 STATUS:');
   logger.info(`    GET http://localhost:${port}/api/status`);
   logger.info('');
-  logger.info('  📥 RECEBER: mande msg para 553492111561');
+  logger.info('  📥 RECEBER: mande msg para o número conectado no WhatsApp');
   logger.info('');
   logger.info('  ⚠️  SF desabilitado');
   logger.info('═══════════════════════════════════════════════════');

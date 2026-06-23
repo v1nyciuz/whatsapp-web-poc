@@ -30,7 +30,7 @@ A cada 2s, o Node.js verifica o DOM do painel de conversas do WhatsApp Web via `
 
 ```powershell
 # Enviar mensagem (PowerShell)
-Invoke-RestMethod -Uri "http://localhost:3000/api/send" -Method Post -ContentType "application/json" -Headers @{"x-webhook-secret" = "9o5bkn3f12secaghjr7tlm6y"} -Body '{"to":"5534992111561","message":"Teste!"}'
+Invoke-RestMethod -Uri "http://localhost:3000/api/send" -Method Post -ContentType "application/json" -Headers @{"x-webhook-secret" = "SEU_WEBHOOK_SECRET"} -Body '{"to":"SEU_NUMERO","message":"Teste!"}'
 
 # Ver status
 curl http://localhost:3000/api/status
