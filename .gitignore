@@ -1,0 +1,39 @@
+# Salesforce
+.sf/
+.sfdx/
+.localdev/
+/IlluminatedCloud/
+/out/
+target/
+/.illuminatedCloud/
+**/tsconfig*.json
+**/*.tsbuildinfo
+**/graphql.config.yml
+
+# Node
+node_modules/
+
+# Environment
+.env
+.env.local
+
+# Session & cache
+.puppeteer_session/
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Logs
+logs/
+server-out.log
+server-err.log
+
+# IDE
+.idea/
+*.iml
+
+# Chrome binaries
+chrome/
+
+# OS
+.DS_Store
+Thumbs.db
