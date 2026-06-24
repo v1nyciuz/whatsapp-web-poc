@@ -1,0 +1,81 @@
+<template>
+    <div class="whatsapp-chat-container">
+        <!-- Painel esquerdo: lista de conversas -->
+        <div class="conversations-panel">
+            <div class="panel-header">
+                <h2>Conversas</h2>
+            </div>
+            <div class="conversations-list">
+                <template if:false={hasConversations}>
+                    <div class="empty-state">Nenhuma conversa ainda</div>
+                </template>
+                <template for:each={conversations} for:item="conv">
+                    <div
+                        key={conv.id}
+                        class="conversation-item"
+                        data-id={conv.id}
+                        onclick={handleConversationClick}
+                    >
+                        <div class="conv-avatar">{conv.phone}</div>
+                        <div class="conv-info">
+                            <div class="conv-name">{conv.name}</div>
+                            <div class="conv-preview">{conv.lastMessage}</div>
+                        </div>
+                        <template if:true={conv.hasUnread}>
+                            <span class="unread-badge">{conv.unread}</span>
+                        </template>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        <!-- Painel direito: thread de mensagens -->
+        <div class="chat-panel">
+            <template if:false={selectedConversationId}>
+                <div class="no-conversation">Selecione uma conversa</div>
+            </template>
+            <template if:true={selectedConversationId}>
+                <div class="chat-header">
+                    <span class="chat-name">{selectedConversationName}</span>
+                </div>
+                <div class="chat-messages">
+                    <template for:each={messages} for:item="msg">
+                        <div
+                            key={msg.id}
+                            class={msg.isInbound ? 'msg-bubble msg-inbound' : 'msg-bubble msg-outbound'}
+                        >
+                            <div class="msg-text">{msg.body}</div>
+                            <div class="msg-meta">
+                                {msg.time}
+                                <template if:true={msg.isOutbound}>
+                                    <span class="msg-status"> · {msg.status}</span>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+                <div class="chat-input-area">
+                    <input
+                        type="text"
+                        class="chat-input"
+                        placeholder="Digite uma mensagem..."
+                        value={inputMessage}
+                        oninput={handleInputChange}
+                        onkeydown={handleKeyDown}
+                        disabled={sending}
+                    />
+                    <button
+                        class="send-btn"
+                        onclick={handleSend}
+                        disabled={sending || !inputMessage.trim()}
+                    >
+                        {sending ? '...' : 'Enviar'}
+                    </button>
+                </div>
+            </template>
+        </div>
+    </div>
+    <template if:true={error}>
+        <div class="error-banner">{error}</div>
+    </template>
+</template>

@@ -54,7 +54,7 @@ async def send_message(number: str, text: str):
         await page.wait_for_timeout(2000)
         await browser.close()
 
-asyncio.run(send_message("SEU_NUMERO", "Teste Python!"))
+asyncio.run(send_message("5534992111561", "Teste Python!"))
 ```
 
 ## Exemplo com Astra Engine
@@ -69,7 +69,7 @@ def on_message(msg):
     print(f"{msg.from_jid}: {msg.text}")
 
 client.start()
-client.send_text("SEU_NUMERO@s.whatsapp.net", "Olá!")
+client.send_text("5534992111561@s.whatsapp.net", "Olá!")
 ```
 
 ---

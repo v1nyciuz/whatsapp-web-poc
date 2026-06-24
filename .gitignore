@@ -21,11 +21,16 @@ node_modules/
 .puppeteer_session/
 .wwebjs_auth/
 .wwebjs_cache/
+.wwjs_session/
 
 # Logs
 logs/
 server-out.log
 server-err.log
+wa.log
+wa_err.log
+wa.pid
+*.log
 
 # IDE
 .idea/

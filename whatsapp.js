@@ -1,24 +1,174 @@
-const puppeteer = require('puppeteer');
+// whatsapp.js
+// WhatsApp Web via whatsapp-web.js (store injection nativa + eventos em tempo real)
+// Substitui a automação Puppeteer raw por uma lib que acessa o store interno do WA Web,
+// fornecendo metadados estruturados (id, from, body, timestamp, type) e eventos push.
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const logger = require('./logger');
 const path = require('path');
+const qrcode = require('qrcode-terminal');
 
-const WA_URL = 'https://web.whatsapp.com';
-const SESSION_DIR = path.join(__dirname, '.puppeteer_session');
+const SESSION_DIR = path.join(__dirname, '.wwjs_session');
 
-let browser = null;
-let page = null;
+let client = null;
 let isReady = false;
 let myNumber = null;
 let reconnectTimer = null;
-let pollTimer = null;
-const seenMessages = new Set();
 
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
+// Callback injetada pelo index.js para persistir mensagens recebidas no Salesforce
+let onInboundMessage = null;
 
-async function initWhatsApp() {
-  await launchBrowser();
+// ── Inicializa o cliente WhatsApp ────────────────────────────────────────────
+function initWhatsApp({ onMessage } = {}) {
+  if (onMessage) onInboundMessage = onMessage;
+
+  client = new Client({
+    authStrategy: new LocalAuth({ dataPath: SESSION_DIR }),
+    puppeteer: {
+      headless: false,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+      ],
+    },
+  });
+
+  // ── Eventos de autenticação ──────────────────────────────────────────────
+  client.on('qr', (qr) => {
+    logger.info('📱 QR Code gerado! Escaneie com o WhatsApp do celular.');
+    qrcode.generate(qr, { small: true }, (qrcode) => {
+      console.log(qrcode);
+    });
+  });
+
+  client.on('authenticated', () => {
+    logger.info('🔐 WhatsApp autenticado!');
+  });
+
+  client.on('auth_failure', (msg) => {
+    logger.error(`❌ Falha na autenticação: ${msg}`);
+    scheduleReconnect();
+  });
+
+  client.on('loading_screen', (percent) => {
+    logger.info(`⏳ Carregando WhatsApp Web... ${percent}%`);
+  });
+
+  // ── Pronto ───────────────────────────────────────────────────────────────
+  client.on('ready', async () => {
+    isReady = true;
+    try {
+      const info = client.info;
+      myNumber = info.wid.user;
+      logger.info(`✅ WhatsApp pronto! Conectado: ${myNumber}`);
+    } catch {
+      myNumber = null;
+      logger.info('✅ WhatsApp pronto!');
+    }
+    logger.info('📥 Monitorando mensagens recebidas (store injection)...');
+  });
+
+  // ── Mensagem recebida (evento push do store interno) ─────────────────────
+  client.on('message', async (msg) => {
+    // Ignora mensagens enviadas por mim
+    if (msg.fromMe) return;
+    // Ignora grupos (@g.us) e status (@broadcast)
+    if (msg.isStatus) return;
+    const chatId = msg.from || '';
+    if (chatId.endsWith('@g.us')) return;
+
+    // Apenas texto por enquanto (pode expandir para media depois)
+    if (msg.type !== 'chat' && msg.type !== 'text') {
+      logger.info(`📨 [${msg.type}] de ${msg.from} (não-texto, ignorado)`);
+      return;
+    }
+
+    let contactName = null;
+    try {
+      const contact = await msg.getContact();
+      contactName = contact.name || contact.pushname || contact.shortName || null;
+    } catch {}
+
+    const from = msg.from; // ID completo (ex: 7821...@lid ou 5534...@c.us)
+    const body = msg.body || '';
+
+    logger.info(`📨 ${contactName || from}: ${body.substring(0, 120)}`);
+
+    // Dispara callback para persistir no Salesforce
+    if (onInboundMessage) {
+      try {
+        await onInboundMessage({
+          id: msg.id._serialized,
+          from,
+          phone: from,
+          body,
+          timestamp: msg.timestamp,
+          type: msg.type,
+          contactName,
+          fromMe: false,
+        });
+      } catch (err) {
+        logger.error('Erro ao persistir mensagem recebida:', err.message);
+      }
+    }
+  });
+
+  // ── Mensagem criada (inclui enviadas por mim — loga no SF como Outbound) ──
+  client.on('message_create', async (msg) => {
+    if (!msg.fromMe) return; // só processa mensagens que eu enviei
+    if (msg.isStatus) return;
+    const chatId = msg.to || msg.from || '';
+    if (chatId.endsWith('@g.us')) return;
+
+    // Ignora se não for texto
+    if (msg.type !== 'chat' && msg.type !== 'text') return;
+
+    const to = msg.to || msg.from || '';
+    const body = msg.body || '';
+
+    logger.info(`📤 [create] ${to}: ${body.substring(0, 80)}`);
+
+    // Dispara callback para persistir mensagem enviada no SF
+    if (onInboundMessage) {
+      try {
+        await onInboundMessage({
+          id: msg.id._serialized,
+          from: to,
+          phone: to,
+          body,
+          timestamp: msg.timestamp,
+          type: msg.type,
+          contactName: null,
+          fromMe: true,
+        });
+      } catch (err) {
+        logger.error('Erro ao persistir mensagem enviada:', err.message);
+      }
+    }
+  });
+
+  // ── ACK de entrega/leitura (atualiza status da mensagem) ─────────────────
+  client.on('message_ack', async (msg, ack) => {
+    // ack: -1 = erro, 0 = pendente, 1 = enviado, 2 = entregue, 3 = lido
+    if (!msg.fromMe) return;
+    const ackLabels = { '-1': 'FALHOU', 0: 'PENDENTE', 1: 'ENVIADO', 2: 'ENTREGUE', 3: 'LIDO' };
+    const label = ackLabels[String(ack)] || String(ack);
+    logger.info(`📋 ACK ${label} para msg ${msg.id._serialized}`);
+
+    // Aqui poderíamos atualizar o Status__c da WhatsApp_Message__c no SF
+    // Por enquanto só loga — implementar quando o schema do SF estiver pronto
+  });
+
+  // ── Desconexão ───────────────────────────────────────────────────────────
+  client.on('disconnected', (reason) => {
+    logger.warn(`⚠️ WhatsApp desconectado: ${reason}`);
+    isReady = false;
+    myNumber = null;
+    scheduleReconnect();
+  });
+
+  client.initialize();
 }
 
 function scheduleReconnect() {
@@ -27,250 +177,46 @@ function scheduleReconnect() {
   logger.info('🔄 Reconectando em 10s...');
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null;
-    await launchBrowser();
+    try {
+      if (client) {
+        try { await client.destroy(); } catch {}
+      }
+      initWhatsApp({ onMessage: onInboundMessage });
+    } catch (err) {
+      logger.error('Erro ao reconectar:', err.message);
+      scheduleReconnect();
+    }
   }, 10000);
 }
 
-async function launchBrowser() {
-  try {
-    if (browser) {
-      try { await browser.close(); } catch(e) {}
-      browser = null; page = null;
-    }
-  } catch(e) {}
-
-  try {
-    logger.info('🌐 Abrindo navegador Chrome...');
-    browser = await puppeteer.launch({
-      headless: false,
-      userDataDir: SESSION_DIR,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
-    });
-
-    page = (await browser.pages())[0];
-    await page.setViewport({ width: 1366, height: 768 });
-
-    page.on('error', err => { logger.error(`🚫 ${err.message}`); scheduleReconnect(); });
-    page.on('close', () => { logger.warn('⚠️ Página fechada'); scheduleReconnect(); });
-    browser.on('disconnected', () => { logger.warn('⚠️ Navegador desconectado'); isReady = false; scheduleReconnect(); });
-
-    logger.info('📱 Carregando WhatsApp Web...');
-    await page.goto(WA_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-
-    const authed = await waitForAuth();
-    if (!authed) { scheduleReconnect(); return; }
-
-    isReady = true;
-    await extractMyNumber();
-    startPoll();
-    printInstructions();
-  } catch (err) {
-    logger.error(`❌ ${err.message}`);
-    scheduleReconnect();
-  }
-}
-
-async function waitForAuth() {
-  const deadline = Date.now() + 180000;
-
-  while (Date.now() < deadline) {
-    try {
-      await page.waitForSelector('div[data-testid="chat-list"]', { timeout: 3000 });
-      return true;
-    } catch {}
-
-    try {
-      await page.waitForSelector('canvas[aria-label="Scan me!"]', { timeout: 2000 });
-      logger.info('📱 QR Code gerado! Escaneie com o WhatsApp do celular.');
-      const qrDeadline = Date.now() + 120000;
-      while (Date.now() < qrDeadline) {
-        try {
-          await page.waitForSelector('div[data-testid="chat-list"]', { timeout: 2000 });
-          logger.info('✅ WhatsApp autenticado!');
-          return true;
-        } catch {}
-      }
-      logger.warn('⏰ QR expirou, recarregando...');
-      await page.reload({ waitUntil: 'networkidle2', timeout: 30000 });
-    } catch {}
-  }
-
-  logger.error('❌ Autenticação falhou após 3 min');
-  return false;
-}
-
-async function extractMyNumber() {
-  try {
-    try {
-      const profile = await page.waitForSelector('header header div[role="button"]', { timeout: 5000 });
-      await profile.click();
-      await sleep(1500);
-
-      myNumber = await page.evaluate(() => {
-        const spans = document.querySelectorAll('span[dir="auto"]');
-        for (const s of spans) {
-          const t = s.textContent.trim();
-          if (/^\d{10,15}$/.test(t.replace(/\D/g, ''))) return t;
-        }
-        return null;
-      });
-
-      const close = await page.$('button[aria-label="Fechar"]');
-      if (close) await close.click();
-      await sleep(1000);
-    } catch {
-      myNumber = await page.evaluate(() => {
-        const spans = document.querySelectorAll('span[dir="auto"]');
-        for (const s of spans) {
-          const t = s.textContent.trim();
-          if (/^\d{10,15}$/.test(t.replace(/\D/g, ''))) return t;
-        }
-        return null;
-      });
-    }
-    if (myNumber) logger.info(`📞 Conectado: ${myNumber}`);
-    else logger.info('📞 Conectado');
-  } catch(e) {
-    logger.warn(`⚠️ ${e.message}`);
-  }
-}
-
+// ── Envia mensagem de texto ──────────────────────────────────────────────────
+// Aceita tanto número limpo (5534999998888) quanto ID completo (7821...@lid / ...@c.us)
 async function sendMessage(to, text) {
-  if (!isReady) throw new Error('WhatsApp não conectado');
+  if (!isReady || !client) throw new Error('WhatsApp não conectado');
 
-  const clean = to.replace(/\D/g, '');
-  logger.info(`📤 Enviando para ${clean}...`);
+  const chatId = to.includes('@') ? to : `${to.replace(/\D/g, '')}@c.us`;
+  logger.info(`📤 Enviando para ${chatId}...`);
 
   try {
-    await page.goto(`${WA_URL}/send?phone=${clean}`, {
-      waitUntil: 'networkidle2',
-      timeout: 30000
-    });
-    await sleep(3000);
-
-    try {
-      await page.waitForFunction(() => {
-        const err = document.querySelector('div[data-testid="conversation-panel-error"]');
-        return !err;
-      }, { timeout: 8000 });
-    } catch {
-      await page.goto(WA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
-      throw new Error(`Número ${clean} inválido ou não está no WhatsApp`);
-    }
-
-    let input = null;
-    for (let i = 0; i < 30; i++) {
-      try {
-        input = await page.$('div[contenteditable="true"][data-tab="10"]');
-        if (input) break;
-      } catch {}
-      await sleep(500);
-    }
-
-    if (!input) {
-      await page.goto(WA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
-      throw new Error('Campo de mensagem não encontrado');
-    }
-
-    await input.click();
-    await sleep(200);
-    await input.type(text, { delay: 15 });
-    await sleep(500);
-
-    const sendBtn = await page.$('button[data-testid="compose-btn-send"]');
-    if (sendBtn) await sendBtn.click();
-    else await page.keyboard.press('Enter');
-
-    await sleep(3000);
-    logger.info(`✅ Enviado para ${clean}`);
-
-    await page.goto(WA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
-    // Reset snapshot so next poll only catches new messages
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; startPoll(); }
-    return true;
+    const sent = await client.sendMessage(chatId, text);
+    logger.info(`✅ Enviado para ${chatId} (id: ${sent.id._serialized})`);
+    return {
+      success: true,
+      messageId: sent.id._serialized,
+      to: chatId,
+    };
   } catch (err) {
-    if (err.message.includes('invalido') || err.message.includes('encontrado')) throw err;
-    logger.error(`❌ Erro: ${err.message}`);
-    await page.goto(WA_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+    logger.error(`❌ Erro ao enviar para ${chatId}: ${err.message}`);
     throw err;
   }
 }
 
-function startPoll() {
-  if (pollTimer) clearInterval(pollTimer);
-  logger.info('📥 Monitorando mensagens recebidas...');
-
-  let lastSnapshot = '';
-
-  pollTimer = setInterval(async () => {
-    if (!page || !isReady) return;
-
-    try {
-      const url = page.url();
-      if (!url.startsWith(WA_URL) || url.includes('/send?')) return;
-
-      const result = await page.evaluate(() => {
-        const msgs = document.querySelectorAll('[data-pre-plain-text]');
-        if (!msgs.length) return null;
-
-        let snapshot = '';
-        for (const m of msgs) {
-          const pre = m.getAttribute('data-pre-plain-text') || '';
-          const spans = m.querySelectorAll('span[dir="ltr"], span[dir="auto"]');
-          let text = '';
-          for (const s of spans) {
-            const t = s.textContent.trim();
-            if (t && t.length > 1) text += t + ' ';
-          }
-          text = text.trim() || '(mensagem)';
-          snapshot += pre + '|' + text + '\n';
-        }
-        return { snapshot, msgs: snapshot.split('\n').filter(Boolean) };
-      });
-
-      if (!result || !result.snapshot) return;
-
-      // Primeiro poll define a baseline (não loga histórico existente)
-      if (!lastSnapshot) { lastSnapshot = result.snapshot; return; }
-
-      if (result.snapshot !== lastSnapshot) {
-        const oldLines = new Set(lastSnapshot.split('\n').filter(Boolean));
-        for (const line of result.msgs) {
-          if (!oldLines.has(line)) {
-            const sender = line.replace(/\[.*?\]\s*/, '').replace(/:.*$/, '').trim();
-            const text = line.split('|').slice(1).join('|');
-            const key = line;
-            if (!seenMessages.has(key)) {
-              seenMessages.add(key);
-              logger.info(`📨 ${sender}: ${text.substring(0, 120)}`);
-            }
-          }
-        }
-      }
-      lastSnapshot = result.snapshot;
-    } catch {}
-  }, 2000);
-}
-
-function printInstructions() {
-  const port = process.env.PORT || 3000;
-  logger.info('═══════════════════════════════════════════════════');
-  logger.info('  ✅ WhatsApp POC PRONTA!');
-  logger.info('');
-  logger.info('  📤 ENVIAR (PowerShell):');
-  logger.info(`    Invoke-RestMethod -Uri "http://localhost:${port}/api/send" -Method Post -ContentType "application/json" -Headers @{"x-webhook-secret" = "SEU_WEBHOOK_SECRET"} -Body '{"to":"SEU_NUMERO","message":"Teste!"}'`);
-  logger.info('');
-  logger.info('  📊 STATUS:');
-  logger.info(`    GET http://localhost:${port}/api/status`);
-  logger.info('');
-  logger.info('  📥 RECEBER: mande msg para o número conectado no WhatsApp');
-  logger.info('');
-  logger.info('  ⚠️  SF desabilitado');
-  logger.info('═══════════════════════════════════════════════════');
-}
-
+// ── Status do serviço ────────────────────────────────────────────────────────
 function getStatus() {
-  return { connected: isReady, number: myNumber };
+  return {
+    connected: isReady,
+    number: myNumber,
+  };
 }
 
 module.exports = { initWhatsApp, sendMessage, getStatus };

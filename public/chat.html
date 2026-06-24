@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WhatsApp POC — Chat</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; }
+  body { background: #f0f2f5; height: 100vh; display: flex; flex-direction: column; }
+
+  .topbar {
+    background: #128c7e; color: #fff; padding: 10px 20px;
+    font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 10px;
+  }
+  .topbar .dot { width: 8px; height: 8px; border-radius: 50%; background: #4ad368; }
+  .topbar .dot.off { background: #e74c3c; }
+  .topbar .spacer { flex: 1; }
+  .topbar a { color: #fff; font-size: 13px; opacity: .8; text-decoration: none; }
+
+  .container { display: flex; flex: 1; overflow: hidden; }
+
+  /* ── Lista de conversas ── */
+  .conv-panel { width: 340px; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; background: #fff; }
+  .conv-search { padding: 10px; border-bottom: 1px solid #f0f2f5; }
+  .conv-search input { width: 100%; padding: 8px 12px; border: 1px solid #e0e0e0; border-radius: 20px; font-size: 14px; outline: none; }
+  .conv-list { flex: 1; overflow-y: auto; }
+  .conv-item { display: flex; align-items: center; padding: 12px 14px; cursor: pointer; border-bottom: 1px solid #f7f7f7; gap: 12px; }
+  .conv-item:hover { background: #f5f5f5; }
+  .conv-item.active { background: #e7f3ff; }
+  .conv-avatar { width: 44px; height: 44px; border-radius: 50%; background: #128c7e; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex-shrink: 0; }
+  .conv-body { flex: 1; overflow: hidden; }
+  .conv-name { font-size: 14px; font-weight: 600; color: #111; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conv-prev { font-size: 12px; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+  .conv-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+  .conv-time { font-size: 11px; color: #aaa; }
+  .unread-badge { background: #25d366; color: #fff; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 7px; min-width: 18px; text-align: center; }
+  .empty-list { padding: 30px; text-align: center; color: #aaa; font-size: 13px; }
+
+  /* ── Painel de chat ── */
+  .chat-panel { flex: 1; display: flex; flex-direction: column; background: #e5ddd5; background-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><circle cx="20" cy="20" r="1" fill="%23ddd"/></svg>'); }
+  .no-chat { flex: 1; display: flex; align-items: center; justify-content: center; color: #888; font-size: 16px; flex-direction: column; gap: 8px; }
+  .no-chat .sub { font-size: 13px; }
+  .chat-header { background: #128c7e; color: #fff; padding: 10px 16px; display: flex; align-items: center; gap: 12px; }
+  .chat-header .avatar { width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,.2); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; }
+  .chat-header .info { flex: 1; }
+  .chat-header .name { font-size: 15px; font-weight: 600; }
+  .chat-header .status { font-size: 12px; opacity: .8; }
+
+  .chat-messages { flex: 1; overflow-y: auto; padding: 16px 12%; display: flex; flex-direction: column; gap: 4px; }
+  .msg { max-width: 65%; padding: 6px 10px; border-radius: 8px; font-size: 14px; line-height: 1.4; position: relative; box-shadow: 0 1px 0.5px rgba(0,0,0,.13); }
+  .msg .text { color: #111; word-wrap: break-word; white-space: pre-wrap; }
+  .msg .meta { font-size: 10px; color: #999; text-align: right; margin-top: 2px; display: flex; align-items: center; gap: 3px; justify-content: flex-end; }
+  .msg-in { align-self: flex-start; background: #fff; border-top-left-radius: 2px; }
+  .msg-out { align-self: flex-end; background: #d9fdd3; border-top-right-radius: 2px; }
+  .check { color: #53bdeb; font-size: 12px; }
+
+  .chat-input { background: #f0f2f5; padding: 10px 12%; display: flex; gap: 10px; align-items: center; }
+  .chat-input input { flex: 1; padding: 10px 16px; border: none; border-radius: 24px; font-size: 14px; outline: none; }
+  .send-btn { background: #128c7e; color: #fff; border: none; border-radius: 50%; width: 44px; height: 44px; cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .send-btn:hover { background: #075e54; }
+  .send-btn:disabled { background: #ccc; cursor: not-allowed; }
+
+  .err { background: #fee; color: #c33; padding: 6px 12px; font-size: 13px; text-align: center; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <span class="dot" id="dot"></span>
+    <span>WhatsApp POC</span>
+    <span class="spacer"></span>
+    <a href="/api/status" target="_blank">status</a>
+  </div>
+
+  <div class="container">
+    <!-- Lista de conversas -->
+    <div class="conv-panel">
+      <div class="conv-search">
+        <input type="text" id="search" placeholder="Buscar conversa..." />
+      </div>
+      <div class="conv-list" id="convList">
+        <div class="empty-list">Nenhuma conversa ainda.<br>Mande uma mensagem para o número conectado.</div>
+      </div>
+    </div>
+
+    <!-- Painel de chat -->
+    <div class="chat-panel" id="chatPanel">
+      <div class="no-chat" id="noChat">
+        <div>Selecione uma conversa</div>
+        <div class="sub">ou envie uma mensagem pelo celular</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const API = '/api';
+let selectedId = null;
+let pollTimer = null;
+
+// ── Status do WhatsApp ────────────────────────────────────────────────────
+async function checkStatus() {
+  try {
+    const r = await fetch(API + '/status');
+    const d = await r.json();
+    const dot = document.getElementById('dot');
+    if (d.whatsapp && d.whatsapp.connected) {
+      dot.classList.remove('off');
+      dot.title = 'Conectado: ' + (d.whatsapp.number || '');
+    } else {
+      dot.classList.add('off');
+      dot.title = 'Desconectado';
+    }
+  } catch {}
+}
+
+// ── Lista conversas ────────────────────────────────────────────────────────
+async function loadConversations() {
+  try {
+    const r = await fetch(API + '/conversations');
+    const d = await r.json();
+    const list = document.getElementById('convList');
+    const convs = d.conversations || [];
+    const filter = (document.getElementById('search').value || '').toLowerCase();
+
+    const filtered = convs.filter(c =>
+      !filter ||
+      (c.contactName || '').toLowerCase().includes(filter) ||
+      (c.phone || '').includes(filter)
+    );
+
+    if (filtered.length === 0) {
+      list.innerHTML = '<div class="empty-list">Nenhuma conversa encontrada.</div>';
+      return;
+    }
+
+    list.innerHTML = filtered.map(c => {
+      const active = c.id === selectedId ? ' active' : '';
+      const unread = c.unread > 0 ? '<span class="unread-badge">' + c.unread + '</span>' : '';
+      const time = c.lastActivity ? new Date(c.lastActivity).toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'}) : '';
+      return '<div class="conv-item' + active + '" data-id="' + esc(c.id) + '" onclick="selectConv(\'' + esc(c.id) + '\')">' +
+        '<div class="conv-avatar">' + (c.contactName ? c.contactName.charAt(0).toUpperCase() : '#') + '</div>' +
+        '<div class="conv-body"><div class="conv-name">' + esc(c.contactName || c.id) + '</div>' +
+        '<div class="conv-prev">' + esc(c.lastMessage || '') + '</div></div>' +
+        '<div class="conv-meta"><span class="conv-time">' + time + '</span>' + unread + '</div>' +
+        '</div>';
+    }).join('');
+  } catch {}
+}
+
+// ── Seleciona conversa e carrega mensagens ─────────────────────────────────
+function selectConv(id) {
+  selectedId = id;
+  document.getElementById('search').value = '';
+  loadConversations();
+  loadMessages();
+  // Marca como lida
+  fetch(API + '/conversations/' + encodeURIComponent(id) + '/read', { method: 'POST' }).catch(()=>{});
+}
+
+async function loadMessages() {
+  if (!selectedId) return;
+  try {
+    const r = await fetch(API + '/messages?id=' + encodeURIComponent(selectedId));
+    const d = await r.json();
+    const panel = document.getElementById('chatPanel');
+    const msgs = d.messages || [];
+    const conv = (await (await fetch(API + '/conversations')).json()).conversations.find(c => c.id === selectedId);
+    const name = conv ? (conv.contactName || conv.id) : selectedId;
+
+    panel.innerHTML =
+      '<div class="chat-header">' +
+        '<div class="avatar">' + (name ? name.charAt(0).toUpperCase() : '#') + '</div>' +
+        '<div class="info"><div class="name">' + esc(name) + '</div><div class="status">' + esc(selectedId) + '</div></div>' +
+      '</div>' +
+      '<div class="chat-messages" id="msgArea">' +
+        (msgs.length === 0 ? '<div style="color:#888;text-align:center;padding:20px">Sem mensagens ainda</div>' :
+        msgs.map(m => {
+          const cls = m.direction === 'Outbound' ? 'msg-out' : 'msg-in';
+          const time = new Date(m.timestamp).toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
+          const check = m.direction === 'Outbound' ? '<span class="check">' + checkIcon(m.status) + '</span>' : '';
+          return '<div class="msg ' + cls + '"><div class="text">' + esc(m.body) + '</div>' +
+            '<div class="meta">' + time + ' ' + check + '</div></div>';
+        }).join('')) +
+      '</div>' +
+      '<div class="chat-input">' +
+        '<input type="text" id="msgInput" placeholder="Digite uma mensagem..." onkeydown="if(event.key===\'Enter\')sendMsg()" />' +
+        '<button class="send-btn" onclick="sendMsg()" id="sendBtn">➤</button>' +
+      '</div>';
+
+    const area = document.getElementById('msgArea');
+    if (area) area.scrollTop = area.scrollHeight;
+  } catch {}
+}
+
+function checkIcon(status) {
+  // ✓ sent, ✓✓ delivered, ✓✓ blue read
+  if (status === 'Read') return '✓✓';
+  if (status === 'Delivered') return '✓✓';
+  if (status === 'Sent') return '✓';
+  return '✓';
+}
+
+// ── Envia mensagem ─────────────────────────────────────────────────────────
+async function sendMsg() {
+  const input = document.getElementById('msgInput');
+  const text = (input.value || '').trim();
+  if (!text || !selectedId) return;
+
+  const btn = document.getElementById('sendBtn');
+  btn.disabled = true;
+  input.value = '';
+
+  try {
+    await fetch(API + '/chat/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to: selectedId, message: text }),
+    });
+    await loadMessages();
+    await loadConversations();
+  } catch (e) {
+    alert('Erro ao enviar: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    input.focus();
+  }
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+// ── Polling ────────────────────────────────────────────────────────────────
+document.getElementById('search').addEventListener('input', loadConversations);
+
+checkStatus();
+loadConversations();
+setInterval(() => {
+  checkStatus();
+  loadConversations();
+  if (selectedId) loadMessages();
+}, 3000);
+</script>
+</body>
+</html>
